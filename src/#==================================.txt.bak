@@ -1,0 +1,236 @@
+﻿#================================================================================
+# ゼロタッチ検証環境 構築・更新スクリプト (Build-TestEnvironment.ps1)
+# (最終版 - 堅牢性・互換性向上、コメント充実)
+#
+# ■ 目的:
+#   このスクリプトは、PCキッティングのテストに必要なHyper-V仮想環境を
+#   全自動で構築、または既存の環境を検証・更新するためのものです。
+#   何度実行しても安全に設計されています。
+#
+# ■ 実行方法:
+#   このファイルは直接実行せず、同じフォルダにある `Build-TestEnvironment.bat` を
+#   右クリックし、「管理者として実行」してください。
+#================================================================================
+
+#--------------------------------------------------------------------------------
+# 【設定項目】: ここをあなたの環境に合わせて修正してください
+#--------------------------------------------------------------------------------
+
+# --- 1. ファイルパス設定 ---
+# スクリプトが置かれているフォルダを自動的に取得します。ポータブルSSDでも動作します。
+$FactoryPath = $PSScriptRoot
+$SourcePath = Join-Path -Path $FactoryPath -ChildPath "Source"
+
+# --- 2. ISOイメージファイル名設定 ---
+# Sourceフォルダに保存したISOイメージの、正しいファイル名を指定してください。
+$ServerIsoName = "26100.1742.240906-0331.ge_release_svc_refresh_SERVER_EVAL_x64FRE_ja-jp.iso"
+$ClientIsoName = "Windows_11.iso" # Windows 11評価版のISOファイル名
+
+# --- 3. 【最重要】インストールするOSイメージの正確な名前を指定 ---
+# Windowsのインストールメディアには、複数のOSエディションが含まれています。
+# どのエディションをインストールするか、正確な名前を指定する必要があります。
+#
+# ▼確認方法:
+#   1. PowerShellを管理者として起動します。
+#   2. Mount-DiskImage -ImagePath "C:\Kitting_Factory\Source\xxxxx.iso"
+#   3. Get-WindowsImage -ImagePath <マウントされたドライブ文字>:\sources\install.wim
+#   4. 表示されたリストから、インストールしたいイメージの「ImageName」をコピーして、下の変数に貼り付けます。
+$ServerImageName = "Windows Server 2025 Datacenter (Desktop Experience)"
+
+#--------------------------------------------------------------------------------
+# ヘルパー関数 (チェック結果を色付きで表示)
+#--------------------------------------------------------------------------------
+function Write-Status {
+    param(
+        [string]$Message,
+        [string]$Status
+    )
+    $ColorMap = @{
+        "OK"         = "Green"
+        "SKIPPED"    = "Yellow"
+        "CREATED"    = "Cyan"
+        "CONFIGURED" = "Cyan"
+        "INFO"       = "White"
+        "ACTION"     = "Magenta"
+        "ERROR"      = "Red"
+    }
+    # ColorMapに存在するキーかどうかを確認
+    if ($ColorMap.ContainsKey($Status)) {
+        $Color = $ColorMap[$Status]
+    } else {
+        $Color = "White" # 未定義の場合は白
+    }
+    Write-Host ("[{0}] - {1}" -f $Status.ToUpper(), $Message) -ForegroundColor $Color
+}
+
+#================================================================================
+# --- 実行本体 ---
+#================================================================================
+Write-Host "================================================="
+Write-Host "  検証環境の構築・更新チェックを開始します..."
+Write-Host "================================================="
+Write-Host ""
+
+# --- 0. 前提条件のチェック ---
+# スクリプトの実行に必要なファイルがすべて揃っているかを確認します。
+Write-Host "--- 0. 前提条件のチェック ---"
+$requiredFiles = @(
+    (Join-Path -Path $SourcePath -ChildPath $ServerIsoName),
+    (Join-Path -Path $SourcePath -ChildPath $ClientIsoName),
+    (Join-Path -Path $FactoryPath -ChildPath "autounattend.xml"),
+    (Join-Path -Path $FactoryPath -ChildPath "Setup-MockServer.ps1")
+)
+$filesMissing = $false
+foreach ($file in $requiredFiles) {
+    if (-not (Test-Path -Path $file)) {
+        Write-Status "必須ファイルが見つかりません: $file" "ERROR"
+        $filesMissing = $true
+    }
+}
+if ($filesMissing) {
+    Write-Status "必要なファイルが不足しているため、処理を中断します。Sourceフォルダとファイル名を確認してください。" "ERROR"
+    pause
+    exit 1
+}
+Write-Status "すべての必須ファイルが存在します。" "OK"
+Write-Host ""
+
+
+# --- 1. 仮想スイッチのチェックと作成 ---
+# 仮想マシンがネットワークに接続するための仮想的なハブを作成します。
+Write-Host "--- 1. 仮想スイッチの構成 ---"
+try {
+    # vSwitch-Internet: インターネット接続用。ホストPCの物理NICに接続します。
+    if (-not (Get-VMSwitch -Name "vSwitch-Internet" -ErrorAction SilentlyContinue)) {
+        $physAdapter = Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | Select-Object -First 1
+        New-VMSwitch -Name "vSwitch-Internet" -NetAdapterName $physAdapter.Name -AllowManagementOS $true
+        Write-Status "仮想スイッチ 'vSwitch-Internet' を作成しました。" "CREATED"
+    } else {
+        Write-Status "仮想スイッチ 'vSwitch-Internet' はすでに存在します。" "OK"
+    }
+
+    # vSwitch-LGWAN: 模擬LGWAN用。外部から完全に隔離されたネットワークです。
+    if (-not (Get-VMSwitch -Name "vSwitch-LGWAN" -ErrorAction SilentlyContinue)) {
+        New-VMSwitch -Name "vSwitch-LGWAN" -SwitchType Private
+        Write-Status "仮想スイッチ 'vSwitch-LGWAN' を作成しました。" "CREATED"
+    } else {
+        Write-Status "仮想スイッチ 'vSwitch-LGWAN' はすでに存在します。" "OK"
+    }
+}
+catch {
+    Write-Status "仮想スイッチの構成中にエラーが発生しました: $($_.Exception.Message)" "ERROR"
+    pause
+    exit 1
+}
+Write-Host ""
+
+# --- 2. MockServerのチェックと作成 ---
+# テスト用のドメインコントローラー、ファイルサーバー、プロキシサーバーとなる仮想マシンを構築します。
+Write-Host "--- 2. MockServer の構成 ---"
+$isoMount = $null
+try {
+    if (-not (Get-VM -Name "MockServer" -ErrorAction SilentlyContinue)) {
+        Write-Status "'MockServer' を新規作成します..." "INFO"
+        
+        # New-VMコマンドを、より幅広いPowerShellバージョンで動作する互換性の高い形式に修正しました。
+        # 最初にvSwitch-LGWANに接続し、後からvSwitch-Internetを追加します。
+        $vmMockServer = New-VM -Name "MockServer" -MemoryStartupBytes 4GB -Generation 2 -VHDPath "$FactoryPath\MockServer.vhdx" -NewVHDSizeBytes 80GB -SwitchName "vSwitch-LGWAN"
+        Add-VMNetworkAdapter -VMName "MockServer" -SwitchName "vSwitch-Internet"
+        Enable-VMTPM -VMName "MockServer"
+        Set-VMFirmware -VMName "MockServer" -EnableSecureBoot On
+        Write-Status "仮想マシン 'MockServer' を作成しました。" "CREATED"
+
+        # --- OSイメージの展開 (新規作成時のみ実行) ---
+        Write-Host "  - OSイメージを展開中... (時間がかかります)"
+        $vhd = Mount-VHD -Path "$FactoryPath\MockServer.vhdx" -Passthru | Get-Disk | Clear-Disk -RemoveData -RemoveOEM -Confirm:$false | Initialize-Disk -Passthru -PartitionStyle GPT
+        $osPartition = $vhd | New-Partition -AssignDriveLetter -UseMaximumSize
+        $osPartition | Format-Volume -FileSystem NTFS -Confirm:$false
+        $osDriveLetter = $osPartition.DriveLetter
+
+        $isoMount = Mount-DiskImage -ImagePath "$SourcePath\$ServerIsoName" -Passthru
+        $wimPath = Join-Path -Path ($isoMount | Get-Volume).DriveLetter -ChildPath "sources\install.wim"
+        
+        # 【エラー修正箇所】$ServerImageName変数で指定された、正しいイメージ名でOSイメージを取得します。
+        $wim = Get-WindowsImage -ImagePath $wimPath -Name $ServerImageName
+        
+        Expand-WindowsImage -ImagePath $wim.ImagePath -ImageIndex $wim.ImageIndex -ApplyPath ($osDriveLetter + ":\")
+
+        Write-Host "  - 無人応答ファイルと設定スクリプトをコピー中..."
+        New-Item -Path ($osDriveLetter + ":\Windows\Panther") -ItemType Directory -Force
+        Copy-Item -Path "$FactoryPath\autounattend.xml" -Destination ($osDriveLetter + ":\Windows\Panther\unattend.xml")
+        New-Item -Path ($osDriveLetter + ":\Source") -ItemType Directory
+        Copy-Item -Path "$FactoryPath\Setup-MockServer.ps1" -Destination ($osDriveLetter + ":\Source\")
+        Copy-Item -Path "$SourcePath\*" -Destination ($osDriveLetter + ":\Source\") -Recurse
+
+        Write-Host "  - VHDXをアンマウント中..."
+        Dismount-VHD -Path "$FactoryPath\MockServer.vhdx"
+        Dismount-DiskImage -ImagePath "$SourcePath\$ServerIsoName"
+        $isoMount = $null
+        Write-Status "OSイメージの展開が完了しました。" "OK"
+    } else {
+        Write-Status "仮想マシン 'MockServer' はすでに存在します。OS展開はスキップします。" "SKIPPED"
+    }
+}
+catch {
+    Write-Status "MockServerの構築中にエラーが発生しました: $($_.Exception.Message)" "ERROR"
+}
+finally {
+    # スクリプトが途中で失敗しても、マウントされたISOイメージが残らないようにクリーンアップします。
+    if ($isoMount) {
+        Dismount-DiskImage -ImagePath "$SourcePath\$ServerIsoName"
+    }
+}
+Write-Host ""
+
+# --- 3. Test-PCのチェックと作成 ---
+# キッティングのテスト対象となる、まっさらなWindows 11仮想マシンを準備します。
+Write-Host "--- 3. Test-PC の構成 ---"
+try {
+    if (-not (Get-VM -Name "Test-PC" -ErrorAction SilentlyContinue)) {
+        Write-Status "'Test-PC' を新規作成します..." "INFO"
+        
+        # New-VMコマンドをより互換性の高い形式に修正しました。
+        New-VM -Name "Test-PC" -MemoryStartupBytes 4GB -Generation 2 -VHDPath "$FactoryPath\Test-PC.vhdx" -NewVHDSizeBytes 80GB -SwitchName "vSwitch-Internet"
+        
+        Add-VMDvdDrive -VMName "Test-PC" -Path "$SourcePath\$ClientIsoName"
+        Write-Status "仮想マシン 'Test-PC' を作成しました。" "CREATED"
+        Write-Status ">>> 'Test-PC'を起動して手動でOSをインストールし、OOBE画面でシャットダウン後、チェックポイントを作成してください <<<" "ACTION"
+    } else {
+        Write-Status "仮想マシン 'Test-PC' はすでに存在します。" "OK"
+    }
+
+    # --- 4. Test-PCのWindows 11要件設定を検証・修正 ---
+    # Test-PCがWindows 11の要件を満たしているかを確認し、不足していれば自動で設定します。
+    $vmTestPC = Get-VM -Name "Test-PC"
+    if ($vmTestPC.ProcessorCount -ne 2) {
+        Set-VMProcessor -VMName "Test-PC" -Count 2
+        Write-Status "'Test-PC' の仮想プロセッサ数を2に設定しました。" "CONFIGURED"
+    } else {
+        Write-Status "'Test-PC' の仮想プロセッサ数は要件を満たしています。" "OK"
+    }
+
+    $vmSecurity = Get-VMSecurity -VMName "Test-PC"
+    if (-not $vmSecurity.TpmEnabled) {
+        Enable-VMTPM -VMName "Test-PC"
+        Write-Status "'Test-PC' の仮想TPMを有効化しました。" "CONFIGURED"
+    } else {
+        Write-Status "'Test-PC' の仮想TPMは有効です。" "OK"
+    }
+
+    $vmFirmware = Get-VMFirmware -VMName "Test-PC"
+    if ($vmFirmware.SecureBoot -ne "On") {
+        Set-VMFirmware -VMName "Test-PC" -EnableSecureBoot On
+        Write-Status "'Test-PC' のセキュアブートを有効化しました。" "CONFIGURED"
+    } else {
+        Write-Status "'Test-PC' のセキュアブートは有効です。" "OK"
+    }
+}
+catch {
+    Write-Status "Test-PCの構成中にエラーが発生しました: $($_.Exception.Message)" "ERROR"
+}
+Write-Host ""
+
+Write-Host "================================================="
+Write-Host "  構築・更新チェックが完了しました。"
+Write-Host "  'MockServer'を起動して初回セットアップを完了させてください。"
+Write-Host "=================================================" -ForegroundColor Green
