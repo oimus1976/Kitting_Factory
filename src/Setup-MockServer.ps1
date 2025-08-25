@@ -74,6 +74,8 @@ try {
         $internetAdapter = Get-NetAdapter -Name $InternetNicOriginalName -ErrorAction Stop
         Write-Host "アダプター '$($internetAdapter.Name)' を 'vNIC-Internet' に名前変更し、設定します..."
         Rename-NetAdapter -Name $internetAdapter.Name -NewName "vNIC-Internet" -ErrorAction Stop
+        # 静的IPを設定する前にDHCPを無効化し、設定の信頼性を向上させる
+        Set-NetIPInterface -InterfaceAlias "vNIC-Internet" -Dhcp Disabled -ErrorAction Stop
         # 既存のIP設定をクリア (冪等性の確保)
         Get-NetIPAddress -InterfaceAlias "vNIC-Internet" -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false
         Get-NetRoute -InterfaceAlias "vNIC-Internet" -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -ne "0.0.0.0" } | Remove-NetRoute -Confirm:$false
