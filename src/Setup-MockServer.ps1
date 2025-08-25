@@ -86,6 +86,8 @@ try {
         $lgwanAdapter = Get-NetAdapter -Name $LgwanNicOriginalName -ErrorAction Stop
         Write-Host "アダプター '$($lgwanAdapter.Name)' を 'vNIC-LGWAN' に名前変更し、設定します..."
         Rename-NetAdapter -Name $lgwanAdapter.Name -NewName "vNIC-LGWAN" -ErrorAction Stop
+        # 静的IPを設定する前にDHCPを無効化し、設定の信頼性を向上させる
+        Set-NetIPInterface -InterfaceAlias "vNIC-LGWAN" -Dhcp Disabled -ErrorAction Stop
         # 既存のIP設定をクリア (冪等性の確保)
         Get-NetIPAddress -InterfaceAlias "vNIC-LGWAN" -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false
         # 新しいIP設定を適用
