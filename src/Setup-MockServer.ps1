@@ -1,10 +1,10 @@
 ﻿<#
 .SYNOPSIS
-    設定ファイルに基づき、仮想テストサーバーのセットアップを完全に自動化します。
+    設定ファイルに基づき、仮想テストサーバーのセットアップを完全に自動化します。(改訂版)
     Windowsのunattend.xmlから初回起動時に呼び出されることを想定しています。
 .DESCRIPTION
     このスクリプトは、config.ps1 ファイルからすべての構成を読み込み、
-    ネットワークアダプターをハードコードされた名前で設定することで、信頼性の高いゼロタッチ実行を実現します。
+    MACアドレスを使用してネットワークアダプターを決定論的に識別・設定することで、信頼性の高いゼロタッチ実行を実現します。
     処理は再起動を挟んで2つのフェーズで実行され、完了後には自己クリーンアップを行います。
 #>
 
@@ -17,6 +17,114 @@ $SourcePath = "C:\Source" # unattend.xmlから実行されるため、パスを�
 # -Append をつけることで、再起動後に同じファイルに追記する
 Start-Transcript -Path $LogPath -Append
 
+# --- ヘルパー関数 ---
+function Set-StaticIPConfiguration {
+
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$MacAddress,
+
+        [Parameter(Mandatory = $true)]
+        [string]$IPAddress,
+
+        [Parameter(Mandatory = $true)]
+        [int]$PrefixLength,
+
+        [Parameter(Mandatory = $false)]
+        [string]$DefaultGateway,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$DnsServerAddresses,
+
+        [Parameter(Mandatory=$true)]
+        [string]$NewName
+    )
+    try {
+        Write-Verbose "Starting static IP configuration for MAC address: $MacAddress"
+
+        # 1. 安定した識別子（MACアドレス）を使用してアダプターを確実に特定する
+        $adapter = Get-NetAdapter -Physical | Where-Object { $_.MacAddress -eq $MacAddress }
+        if (-not $adapter) {
+            throw "Network adapter with MAC address '$MacAddress' not found."
+        }
+        $ifIndex = $adapter.ifIndex
+        Write-Verbose "Adapter '$($adapter.Name)' with InterfaceIndex '$ifIndex' found."
+
+        # --- 変更点: AD DSインストールの警告を抑制するため、IPv6を無効化 ---
+        Write-Verbose "Disabling IPv6 on adapter '$($adapter.Name)'."
+        Get-NetAdapterBinding -Name $adapter.Name -ComponentID ms_tcpip6 | Disable-NetAdapterBinding -PassThru -Confirm:$false | Out-Null
+
+        # 2. 既存のIP設定をクリアしてクリーンな状態を確保する
+        $existingIPs = Get-NetIPAddress -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+        if ($existingIPs) {
+            Write-Verbose "Removing existing IP addresses from the adapter."
+            $existingIPs | Remove-NetIPAddress -Confirm:$false
+        }
+    
+        # デフォルトゲートウェイもクリアする
+        $existingRoute = Get-NetRoute -InterfaceIndex $ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue
+        if ($existingRoute) {
+            Write-Verbose "Removing existing default gateway."
+            $existingRoute | Remove-NetRoute -Confirm:$false
+        }
+
+        # 3. DHCPを無効化し、状態変更を検証する
+        $ipInterface = Get-NetIPInterface -InterfaceIndex $ifIndex -AddressFamily IPv4
+        if ($ipInterface.Dhcp -ne 'Disabled') {
+            Write-Verbose "Disabling DHCP on the adapter..."
+            $ipInterface | Set-NetIPInterface -Dhcp Disabled
+        
+            # --- 競合状態を回避するための重要な検証ループ ---
+            $timeout = 30 # 30秒のタイムアウト
+            $counter = 0
+            do {
+                Start-Sleep -Seconds 1
+                $currentDhcpState = (Get-NetIPInterface -InterfaceIndex $ifIndex -AddressFamily IPv4).Dhcp
+                $counter++
+                if ($counter -ge $timeout) {
+                    throw "Timeout waiting for DHCP to be disabled. Current state: $currentDhcpState"
+                }
+            } while ($currentDhcpState -ne 'Disabled')
+            Write-Verbose "DHCP successfully disabled."
+        } else {
+            Write-Verbose "DHCP is already disabled."
+        }
+
+        # 4. 新しい静的IPアドレスとデフォルトゲートウェイを設定する
+        $netIPAddressParams = @{
+            InterfaceIndex = $ifIndex
+            IPAddress      = $IPAddress
+            PrefixLength   = $PrefixLength
+        }
+        if (-not [string]::IsNullOrWhiteSpace($DefaultGateway)) {
+            Write-Verbose "Setting new IP address: $IPAddress/$PrefixLength with Gateway: $DefaultGateway"
+            $netIPAddressParams.Add("DefaultGateway", $DefaultGateway)
+        } else {
+            Write-Verbose "Setting new IP address: $IPAddress/$PrefixLength (No Gateway)"
+        }
+        New-NetIPAddress @netIPAddressParams
+
+        # 5. DNSサーバーを設定する
+        Write-Verbose "Setting DNS servers: $($DnsServerAddresses -join ', ')"
+        Set-DnsClientServerAddress -InterfaceIndex $ifIndex -ServerAddresses $DnsServerAddresses
+
+        # アダプター名が既に目的の名前でない場合のみ、名前変更を実行
+        if ($adapter.Name -ne $NewName) {
+            Write-Verbose "Renaming adapter from '$($adapter.Name)' to '$NewName'"
+            $adapter | Rename-NetAdapter -NewName $NewName
+        } else {
+            Write-Verbose "Adapter is already named '$NewName'. Skipping rename."
+        }
+
+        Write-Verbose "Static IP configuration completed successfully."
+        return $true
+    }
+    catch {
+        Write-Error "Failed to configure static IP. Error: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 # --- メイン処理 ---
 try {
     # --- 設定ファイルの読み込み ---
@@ -25,7 +133,7 @@ try {
     if (-not (Test-Path $configPath)) {
         throw "設定ファイルが見つかりません: $configPath"
     }
- . $configPath # ドットソーシングで設定ファイル内の変数を読み込む
+    . $configPath # ドットソーシングで設定ファイル内の変数を読み込む
 
     # --- スクリプトの実行フェーズを判断 ---
     $PostRebootTask = Get-ScheduledTask -TaskName $ScheduledTaskName -ErrorAction SilentlyContinue
@@ -33,12 +141,12 @@ try {
     if ($PostRebootTask) {
         # --- フェーズ2: 再起動後の処理 ---
         Write-Host "フェーズ2: 再起動後の処理を開始します。" -ForegroundColor Green
-
+        
         # 自己クリーンアップ: スケジュールタスクを削除
         Write-Host "一時スケジュールタスク '$($ScheduledTaskName)' を削除しています..."
         Unregister-ScheduledTask -TaskName $ScheduledTaskName -Confirm:$false -ErrorAction Stop
         Write-Host "スケジュールタスクの削除に成功しました。"
-
+        
         # 共有フォルダの作成と設定
         Write-Host "共有フォルダ 'PC_Kitting' を作成しています..."
         if (-not (Test-Path -Path "C:\PC_Kitting")) { New-Item -Path "C:\PC_Kitting" -ItemType Directory -ErrorAction Stop | Out-Null }
@@ -62,40 +170,43 @@ try {
         Write-Host "クリーンアップが完了しました。"
 
         Write-Host "サーバーのセットアップがすべて完了しました。" -ForegroundColor Green
+
     }
     else {
         # --- フェーズ1: 初期セットアップ処理 ---
         Write-Host "フェーズ1: 初期セットアップを開始します。" -ForegroundColor Green
 
-        # ネットワークアダプターの設定 (ハードコードされた名前を使用)
-        Write-Host "ネットワークアダプターを設定しています..."
-        
+        # ネットワークアダプターの設定 (MACアドレスによる堅牢な識別)
+        Write-Host "ネットワークアダプターの設定を開始します..."
+
         # インターネット側アダプターの設定
-        $internetAdapter = Get-NetAdapter -Name $InternetNicOriginalName -ErrorAction Stop
-        Write-Host "アダプター '$($internetAdapter.Name)' を 'vNIC-Internet' に名前変更し、設定します..."
-        Rename-NetAdapter -Name $internetAdapter.Name -NewName "vNIC-Internet" -ErrorAction Stop
-        # 静的IPを設定する前にDHCPを無効化し、設定の信頼性を向上させる
-        Set-NetIPInterface -InterfaceAlias "vNIC-Internet" -Dhcp Disabled -ErrorAction Stop
-        # 既存のIP設定をクリア (冪等性の確保)
-        Get-NetIPAddress -InterfaceAlias "vNIC-Internet" -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false
-        Get-NetRoute -InterfaceAlias "vNIC-Internet" -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -ne "0.0.0.0" } | Remove-NetRoute -Confirm:$false
-        # 新しいIP設定を適用
-        New-NetIPAddress -InterfaceAlias "vNIC-Internet" -IPAddress $InternetNicIpAddress -PrefixLength $InternetNicSubnetPrefix -DefaultGateway $InternetNicGateway -ErrorAction Stop
-        Set-DnsClientServerAddress -InterfaceAlias "vNIC-Internet" -ServerAddresses $InternetNicDns -ErrorAction Stop
-        Write-Host "'vNIC-Internet' の設定が完了しました。"
+        $internetNicParams = @{
+            MacAddress         = $InternetNicMacAddress
+            IPAddress          = $InternetNicIpAddress
+            PrefixLength       = $InternetNicSubnetPrefix
+            DefaultGateway     = $InternetNicGateway
+            DnsServerAddresses = $InternetNicDns
+            NewName            = "vNIC-Internet"
+        }
+        $internetResult = Set-StaticIPConfiguration @internetNicParams
+        if (-not $internetResult) {
+            throw "インターネット側NICの設定に失敗しました。ログを確認してください。"
+        }
 
         # LGWAN側アダプターの設定
-        $lgwanAdapter = Get-NetAdapter -Name $LgwanNicOriginalName -ErrorAction Stop
-        Write-Host "アダプター '$($lgwanAdapter.Name)' を 'vNIC-LGWAN' に名前変更し、設定します..."
-        Rename-NetAdapter -Name $lgwanAdapter.Name -NewName "vNIC-LGWAN" -ErrorAction Stop
-        # 静的IPを設定する前にDHCPを無効化し、設定の信頼性を向上させる
-        Set-NetIPInterface -InterfaceAlias "vNIC-LGWAN" -Dhcp Disabled -ErrorAction Stop
-        # 既存のIP設定をクリア (冪等性の確保)
-        Get-NetIPAddress -InterfaceAlias "vNIC-LGWAN" -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false
-        # 新しいIP設定を適用
-        New-NetIPAddress -InterfaceAlias "vNIC-LGWAN" -IPAddress $LgwanNicIpAddress -PrefixLength $LgwanNicSubnetPrefix -ErrorAction Stop
-        Set-DnsClientServerAddress -InterfaceAlias "vNIC-LGWAN" -ServerAddresses "127.0.0.1" -ErrorAction Stop
-        Write-Host "'vNIC-LGWAN' の設定が完了しました。"
+        $lgwanNicParams = @{
+            MacAddress         = $LgwanNicMacAddress
+            IPAddress          = $LgwanNicIpAddress
+            PrefixLength       = $LgwanNicSubnetPrefix
+            DnsServerAddresses = "127.0.0.1"
+            NewName            = "vNIC-LGWAN"
+        }
+        $lgwanResult = Set-StaticIPConfiguration @lgwanNicParams
+        if (-not $lgwanResult) {
+            throw "LGWAN側NICの設定に失敗しました。ログを確認してください。"
+        }
+
+        Write-Host "すべてのネットワーク設定が完了しました。" -ForegroundColor Green
 
         # 役割のインストール
         Write-Host "役割 (AD-Domain-Services, File-Services) をインストールしています..."
@@ -112,22 +223,18 @@ try {
 
         # ADフォレストの構築
         Write-Host "Active Directory フォレスト '$($DomainName)' を構築しています..."
-        # 設定ファイルから読み込んだ平文パスワードをメモリ上でSecureStringに変換
         $safeModePasswordSecure = ConvertTo-SecureString $SafeModeAdminPasswordPlainText -AsPlainText -Force
-        
         Install-ADDSForest -DomainName $DomainName -DomainNetbiosName $NetbiosName -InstallDns -SafeModeAdministratorPassword $safeModePasswordSecure -Force -ErrorAction Stop
         Write-Host "ADフォレストの構築コマンドが正常に発行されました。サーバーは自動的に再起動します。"
     }
 }
 catch {
-    # エラー発生時に詳細をログに出力して終了
     Write-Error "スクリプトの実行中に致命的なエラーが発生しました: $($_.Exception.Message)"
-    # AD構築に失敗した場合、念のためスケジュールタスクを削除
+    Write-Error "エラーが発生した行: $($_.InvocationInfo.ScriptLineNumber)"
     Unregister-ScheduledTask -TaskName $ScheduledTaskName -Confirm:$false -ErrorAction SilentlyContinue
     exit 1
 }
 finally {
-    # --- ログ記録の終了 ---
     Write-Host "現在のフェーズの処理が完了しました。ログは $($LogPath) に保存されています。"
     Stop-Transcript
 }

@@ -104,30 +104,53 @@ Write-Host ""
 # --- 1. 仮想スイッチのチェックと作成 ---
 Write-Host "--- 1. 仮想スイッチの構成 ---"
 try {
-    if (-not (Get-VMSwitch -Name "vSwitch-Internet" -ErrorAction SilentlyContinue)) {
-        $physAdapter = Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' -and $_.ComponentID -ne 'ms_pacer' } | Sort-Object -Property Speed -Descending | Select-Object -First 1
+    # ----- vSwitch-Internet -----
+    $currentSwitch = Get-VMSwitch -Name "vSwitch-Internet" -ErrorAction SilentlyContinue
+
+    if ($currentSwitch) {
+        if ($currentSwitch.SwitchType -ne "External") {
+            Write-StatusMessage -Status "UPDATE" -Message "既存の 'vSwitch-Internet' が External ではないため再構築します..."
+            Remove-VMSwitch -Name "vSwitch-Internet" -Force
+            Start-Sleep -Seconds 2
+            $currentSwitch = $null
+        } else {
+            Write-StatusMessage -Status "OK" -Message "'vSwitch-Internet' は External スイッチとして既に存在します。"
+        }
+    }
+
+    if (-not $currentSwitch) {
+        # 物理NICの特定
+        $physAdapter = Get-NetAdapter -Physical |
+            Where-Object { $_.Status -eq 'Up' -and $_.ComponentID -ne 'ms_pacer' } |
+            Sort-Object -Property Speed -Descending |
+            Select-Object -First 1
+
         if (-not $physAdapter) {
             throw "有効な物理ネットワークアダプターが見つかりません。"
         }
-        New-VMSwitch -Name "vSwitch-Internet" -NetAdapterName $physAdapter.Name -AllowManagementOS $true
-        Write-StatusMessage -Status "CREATED" -Message "仮想スイッチ 'vSwitch-Internet' を作成しました。"
-    } else {
-        Write-StatusMessage -Status "OK" -Message "仮想スイッチ 'vSwitch-Internet' はすでに存在します。"
+
+        # External vSwitch を作成
+        New-VMSwitch -Name "vSwitch-Internet" -NetAdapterName $physAdapter.Name -AllowManagementOS $true -Notes "External vSwitch for Internet"
+        Write-StatusMessage -Status "CREATED" -Message "External 仮想スイッチ 'vSwitch-Internet' を作成しました。"
     }
 
+    # ----- vSwitch-LGWAN -----
     if (-not (Get-VMSwitch -Name "vSwitch-LGWAN" -ErrorAction SilentlyContinue)) {
-        New-VMSwitch -Name "vSwitch-LGWAN" -SwitchType Private
-        Write-StatusMessage -Status "CREATED" -Message "仮想スイッチ 'vSwitch-LGWAN' を作成しました。"
+        New-VMSwitch -Name "vSwitch-LGWAN" -SwitchType Private -Notes "Private vSwitch for LGWAN"
+        Write-StatusMessage -Status "CREATED" -Message "Private 仮想スイッチ 'vSwitch-LGWAN' を作成しました。"
     } else {
-        Write-StatusMessage -Status "OK" -Message "仮想スイッチ 'vSwitch-LGWAN' はすでに存在します。"
+        Write-StatusMessage -Status "OK" -Message "'vSwitch-LGWAN' はすでに存在します。"
     }
+
 }
 catch {
     Write-Error "仮想スイッチの構成中にエラーが発生しました: $($_.ToString())"
     pause
     exit 1
 }
+
 Write-Host ""
+
 
 # --- 2. MockServerのチェックと作成 ---
 Write-Host "--- 2. MockServer の構成 ---"
@@ -140,7 +163,45 @@ try {
         Write-StatusMessage -Status "INFO" -Message "'MockServer' を新規作成します..."
         $vmMockServer = New-VM -Name "MockServer" -MemoryStartupBytes 4GB -Generation 2 -NewVHDPath $vhdPath -NewVHDSizeBytes 80GB -SwitchName "vSwitch-LGWAN"
         Add-VMNetworkAdapter -VMName "MockServer" -SwitchName "vSwitch-Internet"
-        Set-VMKeyProtector -VMName "MockServer" -NewLocalKeyProtector
+
+        # ========================================================================
+        # ▼▼▼ ここから追加 ▼▼▼
+        # ========================================================================
+        Write-StatusMessage -Status "INFO" -Message "ネットワークアダプターに静的MACアドレスを設定します..."
+        
+        # 改訂版のconfig.ps1に記述したMACアドレスと必ず一致させてください
+        $InternetNicMacAddress = "00-15-5D-00-01-0B" 
+        $LgwanNicMacAddress    = "00-15-5D-00-01-0A" 
+
+        # 仮想スイッチ名でアダプターを確実に特定し、静的MACアドレスを設定
+        #Get-VMNetworkAdapter -VMName "MockServer" -SwitchName "vSwitch-Internet" | Set-VMNetworkAdapter -StaticMacAddress $InternetNicMacAddress
+
+        # ステップ1: VM 'MockServer' からすべてのネットワークアダプターを取得
+        $vmAdapters = Get-VMNetworkAdapter -VMName "MockServer"
+
+        # ステップ2: 結果をフィルタリングし、正しいスイッチに接続されたアダプターを見つける
+        $targetAdapter = $vmAdapters | Where-Object { $_.SwitchName -eq "vSwitch-Internet" }
+
+        # ステップ3: 正しく識別されたアダプターに設定を適用
+        $targetAdapter | Set-VMNetworkAdapter -StaticMacAddress $InternetNicMacAddress
+
+        #Get-VMNetworkAdapter -VMName "MockServer" -SwitchName "vSwitch-LGWAN" | Set-VMNetworkAdapter -StaticMacAddress $LgwanNicMacAddress
+
+        # ステップ1: VM 'MockServer' からすべてのネットワークアダプターを取得(上で処理しているので省略)
+        #$vmAdapters = Get-VMNetworkAdapter -VMName "MockServer"
+
+        # ステップ2: 結果をフィルタリングし、正しいスイッチに接続されたアダプターを見つける
+        $targetAdapter = $vmAdapters | Where-Object { $_.SwitchName -eq "vSwitch-LGWAN" }
+
+        # ステップ3: 正しく識別されたアダプターに設定を適用
+        $targetAdapter | Set-VMNetworkAdapter -StaticMacAddress $LgwanNicMacAddress
+        
+        Write-StatusMessage -Status "CONFIGURED" -Message "静的MACアドレスの設定が完了しました。"
+        # ========================================================================
+        # ▲▲▲ ここまで追加 ▲▲▲
+        # ========================================================================
+
+                Set-VMKeyProtector -VMName "MockServer" -NewLocalKeyProtector
         Enable-VMTPM -VMName "MockServer"
         Set-VMFirmware -VMName "MockServer" -EnableSecureBoot On
         # 仮想マシン名（例: MockServer）
