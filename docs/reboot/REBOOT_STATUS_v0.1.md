@@ -159,7 +159,8 @@ Kitting_Factory/
 以下をすべて満たした場合、  
 **「Kitting_Factory リブート完了」**と判定する。
 
-- [ ] `Build-TestEnvironment_v3.0.ps1` がエラーなく完走
+- [x] `Build-TestEnvironment_v3.0.ps1` がエラーなく完走
+  - Build-TestEnvironment.ps1 は scripts/src/Source 分離後の構成で正常に完走することを確認した。
 - [ ] MockServer VM が起動し、ログイン可能
 - [ ] Test-PC VM が作成される
 - [ ] `Verify-TestEnvironment.ps1` の主要チェックが OK

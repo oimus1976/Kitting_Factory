@@ -27,7 +27,9 @@ scope:
 - Separate user-facing scripts into scripts/ and move Source directory to repo root
 - Remove remaining FactoryPath references and align internal paths after scripts/src separation
 
-
 ### Notes
 - 本 CHANGELOG は 2026-01 のリブートを起点とする
 - それ以前の変更履歴は遡及記載しない
+
+### Verified
+- Build-TestEnvironment.ps1 completes successfully after repository structure refactor
