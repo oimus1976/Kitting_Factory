@@ -25,6 +25,8 @@ scope:
 - Build-TestEnvironment.ps1 の正本候補を再定義
 - Align Build-TestEnvironment ISO names and Server ImageName with source inventory
 - Separate user-facing scripts into scripts/ and move Source directory to repo root
+- Remove remaining FactoryPath references and align internal paths after scripts/src separation
+
 
 ### Notes
 - 本 CHANGELOG は 2026-01 のリブートを起点とする

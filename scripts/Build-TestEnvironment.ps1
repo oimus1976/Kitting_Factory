@@ -13,6 +13,7 @@ param (
 $ScriptRoot  = $PSScriptRoot
 $RepoRoot    = Resolve-Path (Join-Path $ScriptRoot "..")
 $SourcePath  = Join-Path $RepoRoot "Source"
+$SrcPath    = Join-Path $RepoRoot "src"
 $ServerIsoName = "17763.3650.221105-1748.rs5_release_svc_refresh_SERVER_EVAL_x64FRE_ja-jp.iso"
 $ClientIsoName = "26100.1742.240906-0331.ge_release_svc_refresh_CLIENTENTERPRISEEVAL_OEMRET_x64FRE_ja-jp.iso"
 $ServerImageName = "Windows Server 2019 Datacenter (Desktop Experience)"
@@ -78,9 +79,9 @@ try {
     $requiredFiles = @(
         (Join-Path -Path $SourcePath -ChildPath $ServerIsoName),
         (Join-Path -Path $SourcePath -ChildPath $ClientIsoName),
-        (Join-Path -Path $FactoryPath -ChildPath "unattend.xml"),
-        (Join-Path -Path $FactoryPath -ChildPath "Setup-MockServer.ps1")
-        (Join-Path -Path $FactoryPath -ChildPath "config.ps1")
+        (Join-Path $SrcPath "autounattend.xml"),
+        (Join-Path $SrcPath "Setup-MockServer.ps1")
+        #(Join-Path $SrcPath "config.ps1")
     )
 
     $missingFiles = $requiredFiles | Where-Object { -not (Test-Path -Path $_ -PathType Leaf) }
@@ -156,7 +157,7 @@ Write-Host ""
 # --- 2. MockServerのチェックと作成 ---
 Write-Host "--- 2. MockServer の構成 ---"
 $isoMount = $null
-$vhdPath = Join-Path -Path $FactoryPath -ChildPath "MockServer.vhdx"
+$vhdPath = Join-Path $RepoRoot "MockServer.vhdx"
 $vhdObject = $null
 
 try {
@@ -310,7 +311,7 @@ try {
         # ★★★ 修正点 ★★★
         # ファイル名を unattend.xml に変更し、コピー先を2か所に増やす
         $unattendFileName = "unattend.xml"
-        $unattendSourcePath = Join-Path -Path $FactoryPath -ChildPath $unattendFileName
+        $unattendSourcePath = Join-Path $SrcPath $unattendFileName
 
         # コピー先1: C:\Windows\Panther
         $pantherPath = Join-Path -Path ($osDriveLetter + ":") -ChildPath "Windows\Panther"
@@ -325,8 +326,8 @@ try {
 
         $sourcePathInVHD = Join-Path -Path ($osDriveLetter + ":") -ChildPath "Source"
         $null = New-Item -Path $sourcePathInVHD -ItemType Directory -Force
-        Copy-Item -Path (Join-Path -Path $FactoryPath -ChildPath "Setup-MockServer.ps1") -Destination $sourcePathInVHD
-        Copy-Item -Path (Join-Path -Path $FactoryPath -ChildPath "config.ps1") -Destination $sourcePathInVHD
+        Copy-Item -Path (Join-Path $SrcPath "Setup-MockServer.ps1") -Destination $sourcePathInVHD
+#       Copy-Item -Path (Join-Path $SrcPath "config.ps1") -Destination $sourcePathInVHD
         Copy-Item -Path (Join-Path -Path $SourcePath -ChildPath "*") -Destination $sourcePathInVHD -Recurse -Force
 
         Write-StatusMessage -Status "INFO" -Message "VHDXをアンマウント中..."
@@ -375,7 +376,7 @@ try {
     if (-not $vmTestPC) {
         Write-StatusMessage -Status "INFO" -Message "'Test-PC' を新規作成します..."
         $clientIsoPath = Join-Path -Path $SourcePath -ChildPath $ClientIsoName
-        $vmTestPC = New-VM -Name "Test-PC" -MemoryStartupBytes 4GB -Generation 2 -NewVHDPath (Join-Path -Path $FactoryPath -ChildPath "Test-PC.vhdx") -NewVHDSizeBytes 80GB -SwitchName "vSwitch-Internet"
+        $vmTestPC = New-VM -Name "Test-PC" -MemoryStartupBytes 4GB -Generation 2 -NewVHDPath (Join-Path $RepoRoot "Test-PC.vhdx") -NewVHDSizeBytes 80GB -SwitchName "vSwitch-Internet"
         Add-VMDvdDrive -VMName "Test-PC" -Path $clientIsoPath
         Write-StatusMessage -Status "CREATED" -Message "仮想マシン 'Test-PC' を作成しました。"
         Write-StatusMessage -Status "ACTION" -Message ">>> 'Test-PC'を起動して手動でOSをインストールし、OOBE画面でシャットダウン後、チェックポイントを作成してください <<<"
