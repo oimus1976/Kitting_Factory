@@ -16,7 +16,8 @@ $SourcePath  = Join-Path $RepoRoot "Source"
 $SrcPath    = Join-Path $RepoRoot "src"
 $ServerIsoName = "17763.3650.221105-1748.rs5_release_svc_refresh_SERVER_EVAL_x64FRE_ja-jp.iso"
 $ClientIsoName = "26100.1742.240906-0331.ge_release_svc_refresh_CLIENTENTERPRISEEVAL_OEMRET_x64FRE_ja-jp.iso"
-$ServerImageName = "Windows Server 2019 Datacenter (Desktop Experience)"
+$ServerImageIndex = 4
+# $ServerImageName = "Windows Server 2019 Datacenter (Desktop Experience)"
 
 #================================================================================
 # --- ヘルパー関数 ---
@@ -285,7 +286,7 @@ try {
         $wimPath = Join-Path -Path ($isoDrive.DriveLetter + ":") -ChildPath "sources\install.wim"
         if (-not (Test-Path $wimPath)) { throw "ISOマウント内に sources\install.wim が見つかりません。" }
 
-        $wim = Get-WindowsImage -ImagePath $wimPath -Name $ServerImageName -ErrorAction Stop
+        $wim = Get-WindowsImage -ImagePath $wimPath -Index $ServerImageIndex -ErrorAction Stop
         Expand-WindowsImage -ImagePath $wim.ImagePath -Index $wim.ImageIndex -ApplyPath ($osDriveLetter + ":\")
 
         # Windows を起動可能にする BCD を作成
