@@ -23,6 +23,7 @@ scope:
 ### Changed
 - docs/reboot/ フォルダ構成を採用
 - Build-TestEnvironment.ps1 の正本候補を再定義
+- Align Build-TestEnvironment ISO names and Server ImageName with source inventory
 
 ### Notes
 - 本 CHANGELOG は 2026-01 のリブートを起点とする
