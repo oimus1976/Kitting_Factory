@@ -10,8 +10,9 @@ param (
 )
 
 # --- 設定項目 ---
-$FactoryPath = $PSScriptRoot
-$SourcePath = Join-Path -Path $FactoryPath -ChildPath "Source"
+$ScriptRoot  = $PSScriptRoot
+$RepoRoot    = Resolve-Path (Join-Path $ScriptRoot "..")
+$SourcePath  = Join-Path $RepoRoot "Source"
 $ServerIsoName = "17763.3650.221105-1748.rs5_release_svc_refresh_SERVER_EVAL_x64FRE_ja-jp.iso"
 $ClientIsoName = "26100.1742.240906-0331.ge_release_svc_refresh_CLIENTENTERPRISEEVAL_OEMRET_x64FRE_ja-jp.iso"
 $ServerImageName = "Windows Server 2019 Datacenter (Desktop Experience)"
