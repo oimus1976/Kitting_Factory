@@ -5,6 +5,7 @@ desktop.ini
 # 大容量ファイル
 Source/
 *.vhdx
+*.avhdx
 *.iso
 
 # ログファイル

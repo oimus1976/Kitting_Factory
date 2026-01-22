@@ -82,7 +82,7 @@ try {
         (Join-Path -Path $SourcePath -ChildPath $ClientIsoName),
         (Join-Path $SrcPath "autounattend.xml"),
         (Join-Path $SrcPath "Setup-MockServer.ps1")
-        #(Join-Path $SrcPath "config.ps1")
+        (Join-Path $SrcPath "config.ps1")
     )
 
     $missingFiles = $requiredFiles | Where-Object { -not (Test-Path -Path $_ -PathType Leaf) }
@@ -253,7 +253,7 @@ try {
         # 2) EFIシステムパーティション 500MB
         Write-StatusMessage -Status "INFO" -Message "  - EFIシステムパーティションを作成中..."
         $efiPartition = New-Partition -DiskNumber $disk.Number -Size 500MB -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -AssignDriveLetter
-        $efiDriveLetter = ($efiPartition | Get-Volume).DriveLetter
+        $efiDriveLetter = (($efiPartition | Get-Volume -ErrorAction SilentlyContinue 2>$null).DriveLetter)
         if (-not $efiDriveLetter) {
             # 手動割り当て処理（必要なら）
             $efiPartition | Set-Partition -NewDriveLetter Z
@@ -269,7 +269,7 @@ try {
         # 4) OSパーティション（残り全領域）
         Write-StatusMessage -Status "INFO" -Message "  - OSパーティションを作成中..."
         $osPartition = New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter
-        $osDriveLetter = ($osPartition | Get-Volume).DriveLetter
+        $osDriveLetter  = (($osPartition  | Get-Volume -ErrorAction SilentlyContinue 2>$null).DriveLetter)
         Format-Volume -Partition $osPartition -FileSystem NTFS -NewFileSystemLabel "Windows" -Confirm:$false | Out-Null
 
         Start-Sleep -Seconds 3
@@ -281,7 +281,7 @@ try {
         $isoMount = Mount-DiskImage -ImagePath $serverIsoPath -PassThru
         if (-not $isoMount) { throw "ISOイメージのマウントに失敗しました。" }
 
-        $isoDrive = Get-Volume -DiskImage $isoMount
+        $isoDrive = Get-Volume -DiskImage $isoMount -ErrorAction SilentlyContinue 2>$null
         if (-not $isoDrive) { throw "マウントされたISOのボリューム情報を取得できませんでした。" }
         $wimPath = Join-Path -Path ($isoDrive.DriveLetter + ":") -ChildPath "sources\install.wim"
         if (-not (Test-Path $wimPath)) { throw "ISOマウント内に sources\install.wim が見つかりません。" }
@@ -328,7 +328,7 @@ try {
         $sourcePathInVHD = Join-Path -Path ($osDriveLetter + ":") -ChildPath "Source"
         $null = New-Item -Path $sourcePathInVHD -ItemType Directory -Force
         Copy-Item -Path (Join-Path $SrcPath "Setup-MockServer.ps1") -Destination $sourcePathInVHD
-#       Copy-Item -Path (Join-Path $SrcPath "config.ps1") -Destination $sourcePathInVHD
+        Copy-Item -Path (Join-Path $SrcPath "config.ps1") -Destination $sourcePathInVHD
         Copy-Item -Path (Join-Path -Path $SourcePath -ChildPath "*") -Destination $sourcePathInVHD -Recurse -Force
 
         Write-StatusMessage -Status "INFO" -Message "VHDXをアンマウント中..."

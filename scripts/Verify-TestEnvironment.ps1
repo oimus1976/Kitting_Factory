@@ -69,6 +69,44 @@ if ($vmTestPC) {
 }
 Write-Host ""
 
+Write-Host "=== Verify 前提条件チェック ==="
+
+$MockServerIp = "192.168.0.200"
+Write-Host "[ASSUME] MockServer IP: $MockServerIp"
+
+# --- L3 到達性チェック ---
+$netProbe = Test-NetConnection $MockServerIp -Port 5985 -InformationLevel Detailed
+
+Write-Host "[INFO] Host Source IP   : $($netProbe.SourceAddress)"
+Write-Host "[INFO] InterfaceAlias  : $($netProbe.InterfaceAlias)"
+
+if (-not $netProbe.PingSucceeded) {
+    Write-Warning "[PRECONDITION NG] MockServer に Ping が届きません"
+    Write-Warning "  - ホストIPとMockServer IPが同一セグメントか確認してください"
+    $srcIp = ($netProbe.SourceAddress | Select-Object -ExpandProperty IPAddress -ErrorAction SilentlyContinue)
+    Write-Host "[INFO] Host Source IP   : $srcIp"
+    Write-Warning "  - MockServer IP : $MockServerIp"
+    Write-Warning "  - これは WinRM 以前の問題です"
+    return
+}
+
+if (-not $netProbe.TcpTestSucceeded) {
+    Write-Warning "[PRECONDITION NG] TCP 5985 (WinRM) に接続できません"
+    Write-Warning "  - MockServer 側で WinRM / FW / NetworkProfile を確認してください"
+    return
+}
+Write-Host ""
+Write-Host "[ASSUME] WinRM over HTTP (5985) を使用します"
+
+$trustedHosts = (Get-Item WSMan:\localhost\Client\TrustedHosts).Value
+if ($trustedHosts -notmatch [regex]::Escape($MockServerIp)) {
+    Write-Warning "[PRECONDITION NG] TrustedHosts に $MockServerIp が登録されていません"
+    Write-Warning "  実行例:"
+    Write-Warning "  Set-Item WSMan:\localhost\Client\TrustedHosts -Value '$MockServerIp' -Force"
+    return
+}
+Write-Host ""
+
 # --- 2. MockServer内部のチェック ---
 Write-Host "--- 3. MockServer 内部の構成チェック ---"
 try {
