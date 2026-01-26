@@ -48,6 +48,7 @@ function Write-StatusMessage {
     $colorMap = @{
         "OK"         = "Green"
         "SKIPPED"    = "Yellow"
+        "UPDATE"     = "Yellow"
         "CREATED"    = "Cyan"
         "CONFIGURED" = "Cyan"
         "INFO"       = "White"
@@ -81,7 +82,7 @@ try {
         (Join-Path -Path $SourcePath -ChildPath $ServerIsoName),
         (Join-Path -Path $SourcePath -ChildPath $ClientIsoName),
         (Join-Path $SrcPath "autounattend.xml"),
-        (Join-Path $SrcPath "Setup-MockServer.ps1")
+        (Join-Path $SrcPath "Setup-MockServer.ps1"),
         (Join-Path $SrcPath "config.ps1")
     )
 
@@ -145,6 +146,24 @@ try {
         Write-StatusMessage -Status "OK" -Message "'vSwitch-LGWAN' はすでに存在します。"
     }
 
+    # ----- vSwitch-HostMgmt -----
+    $hostMgmtSwitch = Get-VMSwitch -Name "vSwitch-HostMgmt" -ErrorAction SilentlyContinue
+    if ($hostMgmtSwitch) {
+        if ($hostMgmtSwitch.SwitchType -ne "Internal") {
+            Write-StatusMessage -Status "UPDATE" -Message "既存の 'vSwitch-HostMgmt' が Internal ではないため再構築します..."
+            Remove-VMSwitch -Name "vSwitch-HostMgmt" -Force
+            Start-Sleep -Seconds 2
+            $hostMgmtSwitch = $null
+        } else {
+            Write-StatusMessage -Status "OK" -Message "'vSwitch-HostMgmt' は Internal スイッチとして既に存在します。"
+        }
+    }
+
+    if (-not $hostMgmtSwitch) {
+        New-VMSwitch -Name "vSwitch-HostMgmt" -SwitchType Internal -Notes "Internal vSwitch for Host ↔ MockServer management"
+        Write-StatusMessage -Status "CREATED" -Message "Internal 仮想スイッチ 'vSwitch-HostMgmt' を作成しました。"
+    }
+
 }
 catch {
     Write-Error "仮想スイッチの構成中にエラーが発生しました: $($_.ToString())"
@@ -157,6 +176,12 @@ Write-Host ""
 
 # --- 2. MockServerのチェックと作成 ---
 Write-Host "--- 2. MockServer の構成 ---"
+
+# --- MockServer NIC MAC アドレス定義（新規・既存共通） ---
+$InternetNicMacAddress  = "00-15-5D-00-01-0B"
+$LgwanNicMacAddress     = "00-15-5D-00-01-0A"
+$HostMgmtNicMacAddress  = "00-15-5D-00-01-0C"
+
 $isoMount = $null
 $vhdPath = Join-Path $RepoRoot "MockServer.vhdx"
 $vhdObject = $null
@@ -166,16 +191,12 @@ try {
         Write-StatusMessage -Status "INFO" -Message "'MockServer' を新規作成します..."
         $vmMockServer = New-VM -Name "MockServer" -MemoryStartupBytes 4GB -Generation 2 -NewVHDPath $vhdPath -NewVHDSizeBytes 80GB -SwitchName "vSwitch-LGWAN"
         Add-VMNetworkAdapter -VMName "MockServer" -SwitchName "vSwitch-Internet"
+        Add-VMNetworkAdapter -VMName "MockServer" -SwitchName "vSwitch-HostMgmt"
 
         # ========================================================================
         # ▼▼▼ ここから追加 ▼▼▼
         # ========================================================================
-        Write-StatusMessage -Status "INFO" -Message "ネットワークアダプターに静的MACアドレスを設定します..."
         
-        # 改訂版のconfig.ps1に記述したMACアドレスと必ず一致させてください
-        $InternetNicMacAddress = "00-15-5D-00-01-0B" 
-        $LgwanNicMacAddress    = "00-15-5D-00-01-0A" 
-
         # 仮想スイッチ名でアダプターを確実に特定し、静的MACアドレスを設定
         #Get-VMNetworkAdapter -VMName "MockServer" -SwitchName "vSwitch-Internet" | Set-VMNetworkAdapter -StaticMacAddress $InternetNicMacAddress
 
@@ -183,9 +204,10 @@ try {
         $vmAdapters = Get-VMNetworkAdapter -VMName "MockServer"
 
         # ステップ2: 結果をフィルタリングし、正しいスイッチに接続されたアダプターを見つける
-        $targetAdapter = $vmAdapters | Where-Object { $_.SwitchName -eq "vSwitch-Internet" }
+        $targetAdapter = @($vmAdapters | Where-Object { $_.SwitchName -eq "vSwitch-Internet" })
 
         # ステップ3: 正しく識別されたアダプターに設定を適用
+        if ($targetAdapter.Count -ne 1) { throw "MockServer: vSwitch-Internet に接続されたNICが1つではありません (Count=$($targetAdapter.Count))" }
         $targetAdapter | Set-VMNetworkAdapter -StaticMacAddress $InternetNicMacAddress
 
         #Get-VMNetworkAdapter -VMName "MockServer" -SwitchName "vSwitch-LGWAN" | Set-VMNetworkAdapter -StaticMacAddress $LgwanNicMacAddress
@@ -194,10 +216,15 @@ try {
         #$vmAdapters = Get-VMNetworkAdapter -VMName "MockServer"
 
         # ステップ2: 結果をフィルタリングし、正しいスイッチに接続されたアダプターを見つける
-        $targetAdapter = $vmAdapters | Where-Object { $_.SwitchName -eq "vSwitch-LGWAN" }
+        $targetAdapter = @($vmAdapters | Where-Object { $_.SwitchName -eq "vSwitch-LGWAN" })
 
         # ステップ3: 正しく識別されたアダプターに設定を適用
+        if ($targetAdapter.Count -ne 1) { throw "MockServer: vSwitch-LGWAN に接続されたNICが1つではありません (Count=$($targetAdapter.Count))" }
         $targetAdapter | Set-VMNetworkAdapter -StaticMacAddress $LgwanNicMacAddress
+
+        $targetAdapter = @($vmAdapters | Where-Object { $_.SwitchName -eq "vSwitch-HostMgmt" })
+        if ($targetAdapter.Count -ne 1) { throw "MockServer: vSwitch-HostMgmt に接続されたNICが1つではありません (Count=$($targetAdapter.Count))" }
+        $targetAdapter | Set-VMNetworkAdapter -StaticMacAddress $HostMgmtNicMacAddress
         
         Write-StatusMessage -Status "CONFIGURED" -Message "静的MACアドレスの設定が完了しました。"
         # ========================================================================
@@ -339,6 +366,26 @@ try {
         Write-StatusMessage -Status "OK" -Message "OSイメージの展開が完了しました。"
     } else {
         Write-StatusMessage -Status "SKIPPED" -Message "仮想マシン 'MockServer' はすでに存在します。OS展開はスキップします。"
+
+        # 既存VMのネットワーク構成だけは仕様に追従させる（HostMgmt を必須化）
+        $adapters = Get-VMNetworkAdapter -VMName "MockServer"
+        if (-not ($adapters | Where-Object { $_.SwitchName -eq "vSwitch-HostMgmt" })) {
+            Add-VMNetworkAdapter -VMName "MockServer" -SwitchName "vSwitch-HostMgmt"
+            Write-StatusMessage -Status "CONFIGURED" -Message "'MockServer' に vSwitch-HostMgmt を追加しました。"
+        }
+
+        # ★★★ ここから追記 ★★★
+        $hostMgmtAdapter = Get-VMNetworkAdapter -VMName "MockServer" |
+            Where-Object { $_.SwitchName -eq "vSwitch-HostMgmt" }
+
+        if ($hostMgmtAdapter.Count -ne 1) {
+            throw "MockServer: vSwitch-HostMgmt NIC が 1 つではありません (Count=$($hostMgmtAdapter.Count))"
+        }
+
+        $hostMgmtAdapter | Set-VMNetworkAdapter -StaticMacAddress $HostMgmtNicMacAddress
+        Write-StatusMessage -Status "CONFIGURED" -Message "'MockServer' の HostMgmt NIC に静的 MAC を設定しました。"
+        # ★★★ ここまで追記 ★★★
+
     }
 }
 catch {

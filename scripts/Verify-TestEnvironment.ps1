@@ -7,8 +7,13 @@
 #--------------------------------------------------------------------------------
 # 【設定項目】
 #--------------------------------------------------------------------------------
+
+# --- Verify 用 固定識別子 ---
+# HostMgmt NIC は Build / Setup で静的MACが保証されている
+$HostMgmtNicMacAddress = "00-15-5D-00-01-0C"
+
 # MockServerのINET側IPアドレス（vSwitch-Internetに接続されている方）
-$MockServer_IP = "192.168.0.200"
+# $MockServer_IP = "192.168.0.200" # 廃止: HostMgmt 経由に切替
 
 # MockServerにログインするための管理者資格情報
 # スクリプト実行時にパスワードの入力が求められます
@@ -71,8 +76,57 @@ Write-Host ""
 
 Write-Host "=== Verify 前提条件チェック ==="
 
-$MockServerIp = "192.168.0.200"
-Write-Host "[ASSUME] MockServer IP: $MockServerIp"
+# $MockServerIp = "192.168.0.200"
+# Write-Host "[ASSUME] MockServer IP: $MockServerIp"
+
+#
+# Verify 前提条件チェック（確定仕様）
+# - 接続先は vSwitch-HostMgmt の IPv4 のみ
+# - 外部ネットワーク / DNS / IPv6 には依存しない
+#
+
+# --- HostMgmt インターフェースの IPv4 を取得 ---
+$hostMgmtIp = Get-NetIPAddress `
+    -InterfaceAlias "vEthernet (vSwitch-HostMgmt)" `
+    -AddressFamily IPv4 `
+    -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+
+if (-not $hostMgmtIp) {
+    Write-Warning "[PRECONDITION NG] vSwitch-HostMgmt に IPv4 アドレスが割り当てられていません"
+    Write-Warning "  - Host 側の Internal vSwitch 設定を確認してください"
+    exit 1
+}
+
+Write-Host "[ASSUME] Verify Target Interface : vSwitch-HostMgmt"
+Write-Host "[ASSUME] Verify Target IP        : $($hostMgmtIp.IPAddress)"
+
+# --- Ping チェック（WinRM 以前の前提） ---
+$pingOk = Test-Connection -ComputerName $hostMgmtIp.IPAddress -Count 1 -Quiet
+
+if (-not $pingOk) {
+    Write-Warning "[PRECONDITION NG] HostMgmt 経由で MockServer に Ping が届きません"
+    Write-Warning "  - Host IP   : $($hostMgmtIp.IPAddress)"
+    Write-Warning "  - これは WinRM 以前の問題です"
+    exit 1
+}
+
+Write-Host "[OK] - HostMgmt 経由の Ping に成功しました"
+
+# --- TCP 5985 (WinRM) チェック ---
+$winrmTcp = Test-NetConnection -ComputerName $hostMgmtIp.IPAddress -Port 5985
+
+if (-not $winrmTcp.TcpTestSucceeded) {
+    Write-Warning "[PRECONDITION NG] TCP 5985 (WinRM) に接続できません"
+    Write-Warning "  - 接続先 : $($hostMgmtIp.IPAddress)"
+    Write-Warning "  - 確認事項:"
+    Write-Warning "      * MockServer 側で WinRM が有効か"
+    Write-Warning "      * NetworkProfile が Private / Domain か"
+    Write-Warning "      * Firewall で TCP 5985 が許可されているか"
+    exit 1
+}
+
+Write-Host "[OK] - TCP 5985 (WinRM) に接続可能です"
 
 # --- L3 到達性チェック ---
 $netProbe = Test-NetConnection $MockServerIp -Port 5985 -InformationLevel Detailed

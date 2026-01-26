@@ -205,6 +205,20 @@ try {
         if (-not $lgwanResult) {
             throw "LGWAN側NICの設定に失敗しました。ログを確認してください。"
         }
+        
+        # --- HostMgmt NIC 設定（管理・Verify 用） ---
+        $hostMgmtNic = Get-NetAdapter |
+            Where-Object { $_.MacAddress -eq $HostMgmtNicMacAddress }
+
+        if (-not $hostMgmtNic) {
+            throw "HostMgmt NIC が見つかりません (MAC=$HostMgmtNicMacAddress)"
+        }
+
+        New-NetIPAddress `
+            -InterfaceIndex $hostMgmtNic.ifIndex `
+            -IPAddress      $HostMgmtNicIpAddress `
+            -PrefixLength  $HostMgmtNicSubnetPrefix `
+            -ErrorAction Stop
 
         Write-Host "すべてのネットワーク設定が完了しました。" -ForegroundColor Green
 
