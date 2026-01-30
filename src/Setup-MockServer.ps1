@@ -207,18 +207,63 @@ try {
         }
         
         # --- HostMgmt NIC 設定（管理・Verify 用） ---
+        Write-Host "HostMgmt NIC の静的IP設定を開始します..."
+
+        function Normalize-Mac {
+            param([string]$Mac)
+            ($Mac -replace '[-:\.]','').ToUpper()
+        }
+
+        $targetMac = Normalize-Mac $HostMgmtNicMacAddress
+
         $hostMgmtNic = Get-NetAdapter |
-            Where-Object { $_.MacAddress -eq $HostMgmtNicMacAddress }
+            Where-Object { (Normalize-Mac $_.MacAddress) -eq $targetMac } |
+            Select-Object -First 1
 
         if (-not $hostMgmtNic) {
             throw "HostMgmt NIC が見つかりません (MAC=$HostMgmtNicMacAddress)"
         }
 
+        $ifIndex = $hostMgmtNic.ifIndex
+
+        # DHCP 無効化（競合回避）
+        $ipInterface = Get-NetIPInterface -InterfaceIndex $ifIndex -AddressFamily IPv4
+        if ($ipInterface.Dhcp -ne 'Disabled') {
+            Set-NetIPInterface -InterfaceIndex $ifIndex -Dhcp Disabled
+            $timeout = 30
+            for ($i=0; $i -lt $timeout; $i++) {
+                Start-Sleep 1
+                if ((Get-NetIPInterface -InterfaceIndex $ifIndex -AddressFamily IPv4).Dhcp -eq 'Disabled') {
+                    break
+                }
+                if ($i -eq $timeout-1) {
+                    throw "DHCP 無効化の待機がタイムアウトしました"
+                }
+            }
+        }
+
+        # 既存 IPv4 を削除
+        Get-NetIPAddress -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Remove-NetIPAddress -Confirm:$false
+
+        # 静的 IP 設定
         New-NetIPAddress `
-            -InterfaceIndex $hostMgmtNic.ifIndex `
-            -IPAddress      $HostMgmtNicIpAddress `
-            -PrefixLength  $HostMgmtNicSubnetPrefix `
+            -InterfaceIndex $ifIndex `
+            -IPAddress $HostMgmtNicIpAddress `
+            -PrefixLength $HostMgmtNicSubnetPrefix `
             -ErrorAction Stop
+
+        # NetworkProfile を Private に
+        Set-NetConnectionProfile -InterfaceIndex $ifIndex -NetworkCategory Private
+
+        # WinRM / Firewall（Verify 前提）
+        Set-Service WinRM -StartupType Automatic
+        Start-Service WinRM
+        Enable-PSRemoting -Force -SkipNetworkProfileCheck
+        Enable-NetFirewallRule -DisplayGroup "Windows Remote Management"
+
+        Write-Host "HostMgmt NIC の設定が完了しました。"
+
 
         Write-Host "すべてのネットワーク設定が完了しました。" -ForegroundColor Green
 

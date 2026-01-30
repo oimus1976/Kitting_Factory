@@ -76,57 +76,54 @@ Write-Host ""
 
 Write-Host "=== Verify 前提条件チェック ==="
 
-# $MockServerIp = "192.168.0.200"
-# Write-Host "[ASSUME] MockServer IP: $MockServerIp"
-
-#
-# Verify 前提条件チェック（確定仕様）
-# - 接続先は vSwitch-HostMgmt の IPv4 のみ
-# - 外部ネットワーク / DNS / IPv6 には依存しない
-#
-
-# --- HostMgmt インターフェースの IPv4 を取得 ---
-$hostMgmtIp = Get-NetIPAddress `
+# 1) Host 側 vNIC の確認（存在 & APIPA NG）
+$hostVnic = Get-NetIPAddress `
     -InterfaceAlias "vEthernet (vSwitch-HostMgmt)" `
     -AddressFamily IPv4 `
     -ErrorAction SilentlyContinue |
     Select-Object -First 1
 
-if (-not $hostMgmtIp) {
-    Write-Warning "[PRECONDITION NG] vSwitch-HostMgmt に IPv4 アドレスが割り当てられていません"
-    Write-Warning "  - Host 側の Internal vSwitch 設定を確認してください"
+if (-not $hostVnic) {
+    Write-Warning "[PRECONDITION NG] ホスト側 vEthernet (vSwitch-HostMgmt) に IPv4 がありません"
+    Write-Warning "  - Build 側で Host vNIC に 192.168.250.x/24 を設定してください（例: 192.168.250.1/24）"
+    exit 1
+}
+
+# APIPA 判定
+$hostIp = $hostVnic.IPAddress
+if ($hostIp -like "169.254.*") {
+    Write-Warning "[PRECONDITION NG] ホスト側 HostMgmt vNIC が APIPA です: $hostIp"
+    Write-Warning "  - Build 側で Host vNIC に静的IPを設定してください（例: 192.168.250.1/24）"
     exit 1
 }
 
 Write-Host "[ASSUME] Verify Target Interface : vSwitch-HostMgmt"
-Write-Host "[ASSUME] Verify Target IP        : $($hostMgmtIp.IPAddress)"
+Write-Host "[ASSUME] Host Source IP          : $hostIp"
+Write-Host "[ASSUME] MockServer Target IP    : $MockServerHostMgmtIp"
 
-# --- Ping チェック（WinRM 以前の前提） ---
-$pingOk = Test-Connection -ComputerName $hostMgmtIp.IPAddress -Count 1 -Quiet
-
+# 2) Ping は「MockServer」に打つ（自己疎通は禁止）
+$pingOk = Test-Connection -ComputerName $MockServerHostMgmtIp -Count 1 -Quiet
 if (-not $pingOk) {
     Write-Warning "[PRECONDITION NG] HostMgmt 経由で MockServer に Ping が届きません"
-    Write-Warning "  - Host IP   : $($hostMgmtIp.IPAddress)"
-    Write-Warning "  - これは WinRM 以前の問題です"
+    Write-Warning "  - Host IP      : $hostIp"
+    Write-Warning "  - Target IP    : $MockServerHostMgmtIp"
+    Write-Warning "  - これは WinRM 以前の問題です（MockServer 側HostMgmt IP/Prefix設定を確認）"
     exit 1
 }
+Write-Host "[OK] - HostMgmt 経由の Ping に成功しました（to MockServer）"
 
-Write-Host "[OK] - HostMgmt 経由の Ping に成功しました"
-
-# --- TCP 5985 (WinRM) チェック ---
-$winrmTcp = Test-NetConnection -ComputerName $hostMgmtIp.IPAddress -Port 5985
-
+# 3) TCP 5985 は「MockServer」に打つ
+$winrmTcp = Test-NetConnection -ComputerName $MockServerHostMgmtIp -Port 5985
 if (-not $winrmTcp.TcpTestSucceeded) {
     Write-Warning "[PRECONDITION NG] TCP 5985 (WinRM) に接続できません"
-    Write-Warning "  - 接続先 : $($hostMgmtIp.IPAddress)"
+    Write-Warning "  - 接続先 : $MockServerHostMgmtIp"
     Write-Warning "  - 確認事項:"
     Write-Warning "      * MockServer 側で WinRM が有効か"
     Write-Warning "      * NetworkProfile が Private / Domain か"
     Write-Warning "      * Firewall で TCP 5985 が許可されているか"
     exit 1
 }
-
-Write-Host "[OK] - TCP 5985 (WinRM) に接続可能です"
+Write-Host "[OK] - TCP 5985 (WinRM) に接続可能です（to MockServer）"
 
 # --- L3 到達性チェック ---
 $netProbe = Test-NetConnection $MockServerIp -Port 5985 -InformationLevel Detailed

@@ -173,6 +173,33 @@ catch {
 
 Write-Host ""
 
+# --- HostMgmt vSwitch 用 Host vNIC の静的IP設定 ---
+Write-Host "Configuring Host vNIC for vSwitch-HostMgmt..."
+
+$hostMgmtIf = Get-NetAdapter -Name "vEthernet (vSwitch-HostMgmt)" -ErrorAction SilentlyContinue
+if (-not $hostMgmtIf) {
+    throw "Host vNIC 'vEthernet (vSwitch-HostMgmt)' が見つかりません"
+}
+
+# DHCP 無効化
+Set-NetIPInterface -InterfaceIndex $hostMgmtIf.ifIndex -Dhcp Disabled -ErrorAction Stop
+
+# 既存 IPv4 を削除
+Get-NetIPAddress -InterfaceIndex $hostMgmtIf.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Remove-NetIPAddress -Confirm:$false
+
+# 静的 IP 設定
+New-NetIPAddress `
+    -InterfaceIndex $hostMgmtIf.ifIndex `
+    -IPAddress "192.168.250.1" `
+    -PrefixLength 24 `
+    -ErrorAction Stop
+
+# NetworkProfile を Private に
+Set-NetConnectionProfile -InterfaceIndex $hostMgmtIf.ifIndex -NetworkCategory Private
+
+Write-Host "Host vNIC for HostMgmt configured: 192.168.250.1/24"
+
 
 # --- 2. MockServerのチェックと作成 ---
 Write-Host "--- 2. MockServer の構成 ---"
