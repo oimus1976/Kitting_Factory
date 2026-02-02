@@ -181,10 +181,20 @@ if (-not $hostMgmtIf) {
     throw "Host vNIC 'vEthernet (vSwitch-HostMgmt)' が見つかりません"
 }
 
-# DHCP 無効化
+# DHCP 無効化（競合回避・完了待ち）
 Set-NetIPInterface -InterfaceIndex $hostMgmtIf.ifIndex -Dhcp Disabled -ErrorAction Stop
 
-# 既存 IPv4 を削除
+$timeout = 30
+for ($i = 0; $i -lt $timeout; $i++) {
+    Start-Sleep -Seconds 1
+    $dhcpState = (Get-NetIPInterface -InterfaceIndex $hostMgmtIf.ifIndex -AddressFamily IPv4).Dhcp
+    if ($dhcpState -eq 'Disabled') { break }
+    if ($i -eq $timeout - 1) {
+        throw "HostMgmt vNIC: DHCP 無効化がタイムアウトしました (state=$dhcpState)"
+    }
+}
+
+# 既存 IPv4 を全削除（APIPA 含む）
 Get-NetIPAddress -InterfaceIndex $hostMgmtIf.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
     Remove-NetIPAddress -Confirm:$false
 
@@ -197,6 +207,14 @@ New-NetIPAddress `
 
 # NetworkProfile を Private に
 Set-NetConnectionProfile -InterfaceIndex $hostMgmtIf.ifIndex -NetworkCategory Private
+
+# 最終状態検証（ここで保証する）
+$finalIp = Get-NetIPAddress -InterfaceIndex $hostMgmtIf.ifIndex -AddressFamily IPv4 |
+    Where-Object { $_.IPAddress -eq "192.168.250.1" }
+
+if (-not $finalIp -or $finalIp.PrefixLength -ne 24) {
+    throw "HostMgmt vNIC の IP 設定が不正です (期待: 192.168.250.1/24, 実際: $($finalIp.IPAddress)/$($finalIp.PrefixLength))"
+}
 
 Write-Host "Host vNIC for HostMgmt configured: 192.168.250.1/24"
 
