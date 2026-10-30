@@ -1,5 +1,7 @@
 # Kitting_Factory
 
+現在の作業はv0.5 DeviceContext起動診断です。[生成物・検査結果・WCD反映・VM受入手順](docs/V05_ACCEPTANCE.md)を参照してください。以下は旧環境構築の説明です。
+
 ## Build-TestEnvironment.bat の解説
 
 このプロジェクトの `src` フォルダに含まれる `Build-TestEnvironment.bat` は、PowerShellスクリプト `Build-TestEnvironment.ps1` を呼び出すためのラッパーです。実際の処理はすべてPowerShellスクリプトに記述されています。
