@@ -1,6 +1,6 @@
 # Kitting_Factory
 
-現在の作業はv0.5 DeviceContext起動診断です。[生成物・検査結果・WCD反映・VM受入手順](docs/V05_ACCEPTANCE.md)を参照してください。以下は旧環境構築の説明です。
+現在の作業はv0.6（デスクトップで管理者1回実行して既存Stageを起動する方式）です。[方針と検証結果](docs/V06_PLAN.md)を参照してください。v0.5のPPKG DeviceContext方式は凍結しました（[v0.5記録](docs/V05_ACCEPTANCE.md)）。以下は旧環境構築の説明です。
 
 ## Build-TestEnvironment.bat の解説
 

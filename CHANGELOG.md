@@ -10,6 +10,12 @@ scope:
 
 # CHANGELOG
 
+## [v0.6 manual start] - 2026-10-30
+
+- v0.5のPPKG DeviceContext（OOBE中SYSTEM起動）方式を凍結。r1失敗は実行経路が非SYSTEMだったため（回収ログでSYSTEMガード行からの例外を確認）。
+- デスクトップで管理者1回実行する入口 scripts/v06/Kitting-Start.cmd を追加。既存Start-Kitting.ps1 -Action Stageを無改変で呼ぶ（Stageは管理者権限で足り、SYSTEM不要）。
+- Hyper-V評価VMで1回検証しPASS：約13秒でWAIT_INET、必須6ファイルのハッシュ一致。Windows 11 Pro実機は未確認。詳細はdocs/V06_PLAN.md。
+
 ## [v0.5 evidence verification fix] - 2026-10-28
 
 - Windows PowerShell 5.1のJSON配列を二重に包んでmanifest件数を誤判定する不具合を修正し、複数要素の読戻し回帰テストを追加。

@@ -14,7 +14,11 @@ assumptions:
 
 # PROJECT_STATUS（v0.1 / リブート版）
 
-## 2026-10-26: v0.5開発再開（現行）
+## 2026-10-30: v0.6（現行）
+
+v0.5のPPKG DeviceContext方式は凍結。デスクトップで `Kitting-Start.cmd` を管理者として1回実行し、既存Stageを起動する方式に転換した。評価VMでWAIT_INETまでPASS。Windows 11 Pro実機は未確認。次の課題はStage以降（Windows Update、ベンダーBAT、IEモード等）の自動化。詳細: [v0.6方針と検証結果](docs/V06_PLAN.md)。以下のv0.5節は履歴。
+
+## 2026-10-26: v0.5開発再開（履歴）
 
 2026-10-28追記: 本人からPowerShell Direct接続成功の報告あり。公開Git外への最小証跡保全スクリプトと本人実行手順を作成した。5.1のローカル合成検査はPASS、実採取は本人の対話認証待ち。[実行手順](docs/V05_GUEST_EVIDENCE.md)。タスク不在の理由と現在のStageは実採取まで未判定。
 
