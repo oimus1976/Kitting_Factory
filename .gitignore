@@ -14,4 +14,5 @@ Source/
 # 機密情報を含む可能性のある設定ファイル
 # (チームで共有すべき設定は、別途テンプレートファイルを用意するのが望ましい)
 config.ps1
+/local-v05/
 docs/reboot/design_notes/

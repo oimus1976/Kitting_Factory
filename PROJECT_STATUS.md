@@ -14,6 +14,23 @@ assumptions:
 
 # PROJECT_STATUS（v0.1 / リブート版）
 
+## 2026-10-30: v0.6（現行）
+
+v0.5のPPKG DeviceContext方式は凍結。デスクトップで `Kitting-Start.cmd` を管理者として1回実行し、既存Stageを起動する方式に転換した。評価VMでWAIT_INETまでPASS。Windows 11 Pro実機は未確認。次の課題はStage以降（Windows Update、ベンダーBAT、IEモード等）の自動化。詳細: [v0.6方針と検証結果](docs/V06_PLAN.md)。以下のv0.5節は履歴。
+
+## 2026-10-26: v0.5開発再開（履歴）
+
+2026-10-28追記: 本人からPowerShell Direct接続成功の報告あり。公開Git外への最小証跡保全スクリプトと本人実行手順を作成した。5.1のローカル合成検査はPASS、実採取は本人の対話認証待ち。[実行手順](docs/V05_GUEST_EVIDENCE.md)。タスク不在の理由と現在のStageは実採取まで未判定。
+
+同日更新: 本人実行後、5.1のmanifest配列件数の誤判定を修正。元の証跡を保持した再検証はPASS。採取時WAIT_INETとタスクの正常削除を確認した。復元の承認判断へ進めるが、復元・PPKG適用は未実施。上の「認証待ち」は準備段階の履歴。
+
+現在の目的はPPKG DeviceContext自動起動の診断・修正。旧MockServer構築は今回のスコープ外。
+v0.4原本と診断キットを直接解析し、Stage系4本のバイト一致を保ったv0.5候補とPPKGを新規領域へ生成した。
+5.1で静的検査、入口5ケース、PPKG内部6ファイル・runtime mappingのハッシュ照合はPASS。
+WindowsのPPKG exportはerror 522。既存7-Zipで内容監査成功だが警告があり、適用互換性・DeviceContext自動起動・Stage回帰はVM受入待ち。
+Test-PCやチェックポイント・既存媒体は変更していない。次はゲストの成功証跡保全後、本人の復元承認を得て既存OOBEチェックポイントから一度受入試験。
+詳細: [v0.5受入記録](docs/V05_ACCEPTANCE.md)。以下のv0.1計画は過去の記録として保持。
+
 ## 1. プロジェクト概要
 
 - プロジェクト名：Kitting_Factory
